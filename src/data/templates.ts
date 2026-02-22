@@ -64,19 +64,19 @@ export const TEMPLATES: GraphTemplate[] = [
     description: 'Research → gather sources → synthesize in one pass.',
     nodes: [
       {
-        kind: 'agent',
+        roles: ['agent'],
         label: 'Lead Researcher',
         description: 'Define scope, questions, and guardrails.',
         tools: ['web-search'],
       },
       {
-        kind: 'tool',
+        roles: ['tool'],
         label: 'Source Collector',
         description: 'Pull relevant sources and surface citations.',
         tools: ['web-search'],
       },
       {
-        kind: 'agent',
+        roles: ['agent'],
         label: 'Synthesizer',
         description: 'Turn sources into a concise narrative.',
         tools: ['doc-summarizer'],
@@ -88,24 +88,61 @@ export const TEMPLATES: GraphTemplate[] = [
     ],
   },
   {
+    id: 'conditional-triage',
+    name: 'Conditional Triage',
+    description: 'Route requests based on urgency or category.',
+    nodes: [
+      {
+        roles: ['agent', 'router'],
+        label: 'Intake Router',
+        description: 'Categorize incoming requests and select a route.',
+        tools: ['doc-summarizer'],
+      },
+      {
+        roles: ['agent'],
+        label: 'High Priority Agent',
+        description: 'Handle urgent or high-value requests.',
+        tools: ['email', 'calendar'],
+      },
+      {
+        roles: ['agent'],
+        label: 'Standard Agent',
+        description: 'Handle standard requests with a quick response.',
+        tools: ['email'],
+      },
+      {
+        roles: ['tool', 'memory'],
+        label: 'Update Memory',
+        description: 'Persist the outcome for future context.',
+        tools: ['notion'],
+      },
+    ],
+    edges: [
+      { source: 0, target: 1, routeKey: 'urgent' },
+      { source: 0, target: 2, routeKey: 'standard' },
+      { source: 1, target: 3 },
+      { source: 2, target: 3 },
+    ],
+  },
+  {
     id: 'support-copilot',
     name: 'Support Copilot',
     description: 'Triage → resolve → update CRM with follow-ups.',
     nodes: [
       {
-        kind: 'agent',
+        roles: ['agent'],
         label: 'Triage Agent',
         description: 'Classify intent and extract key details.',
         tools: ['ticketing'],
       },
       {
-        kind: 'agent',
+        roles: ['agent'],
         label: 'Resolution Agent',
         description: 'Draft reply and decide next steps.',
         tools: ['email'],
       },
       {
-        kind: 'tool',
+        roles: ['tool'],
         label: 'CRM Sync',
         description: 'Update CRM with ticket status and notes.',
         tools: ['crm-update'],
@@ -122,13 +159,13 @@ export const TEMPLATES: GraphTemplate[] = [
     description: 'Capture intent → draft PRD → share with team.',
     nodes: [
       {
-        kind: 'agent',
+        roles: ['agent'],
         label: 'PM Copilot',
         description: 'Clarify goals, constraints, and success metrics.',
         tools: ['calendar'],
       },
       {
-        kind: 'agent',
+        roles: ['agent'],
         label: 'PRD Writer',
         description: 'Draft a crisp PRD with user stories.',
         tools: ['notion'],
