@@ -1,10 +1,14 @@
 import { useMemo, useState } from 'react'
 import ReactFlow, {
   addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
   Background,
   Controls,
   type Connection,
   type Edge,
+  type EdgeChange,
+  type NodeChange,
   type Node,
   useEdgesState,
   useNodesState,
@@ -30,7 +34,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TEMPLATES, TOOL_LIBRARY } from '@/data/templates'
 import { generateLangGraphPython, generateLangGraphTS } from '@/lib/codegen'
-import type { FlowNodeData, NodeKind } from '@/lib/types'
+import type { EdgeKind, FlowEdgeData, FlowNodeData, NodeRole } from '@/lib/types'
 
 const nodeTypes = { flowNode: FlowNode }
 
@@ -43,61 +47,139 @@ const TOOLS_BY_CATEGORY = TOOL_LIBRARY.reduce<Record<string, typeof TOOL_LIBRARY
   {},
 )
 
-const KIND_OPTIONS: { value: NodeKind; label: string }[] = [
-  { value: 'agent', label: 'Agent' },
-  { value: 'tool', label: 'Tool' },
-  { value: 'router', label: 'Router' },
-  { value: 'memory', label: 'Memory' },
+const ROLE_OPTIONS: { value: NodeRole; label: string; hint: string }[] = [
+  {
+    value: 'agent',
+    label: 'Agent',
+    hint: 'Reasoning step that decides what to do next.',
+  },
+  {
+    value: 'tool',
+    label: 'Tool',
+    hint: 'Deterministic capability like search, email, or DB query.',
+  },
+  {
+    value: 'router',
+    label: 'Router',
+    hint: 'Chooses the next node based on state or route key.',
+  },
+  {
+    value: 'memory',
+    label: 'Memory',
+    hint: 'Reads or writes memory/context used by the flow.',
+  },
 ]
 
-const createNode = (kind: NodeKind, index: number): Node<FlowNodeData> => ({
+const createNode = (role: NodeRole, index: number): Node<FlowNodeData> => ({
   id: crypto.randomUUID(),
   type: 'flowNode',
   position: { x: 140 + index * 30, y: 120 + index * 40 },
   data: {
-    kind,
-    label: `${kind[0].toUpperCase()}${kind.slice(1)} node`,
+    roles: [role],
+    label: `${role[0].toUpperCase()}${role.slice(1)} node`,
     description: 'Describe what this node should do.',
     tools: [],
   },
 })
 
+const toRouteKey = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
+const applyEdgePresentation = (edge: Edge<FlowEdgeData>): Edge<FlowEdgeData> => {
+  if (edge.data?.kind === 'conditional') {
+    return {
+      ...edge,
+      label: edge.data.routeKey || 'route',
+      style: { strokeDasharray: '6 4' },
+      animated: true,
+    }
+  }
+  return {
+    ...edge,
+    label: undefined,
+    style: undefined,
+    animated: false,
+  }
+}
+
+const normalizeConditionalEdges = (
+  edges: Edge<FlowEdgeData>[],
+  nodes: Node<FlowNodeData>[],
+) => {
+  const outCounts = edges.reduce<Record<string, number>>((acc, edge) => {
+    acc[edge.source] = (acc[edge.source] ?? 0) + 1
+    return acc
+  }, {})
+
+  return edges.map((edge, index) => {
+    const shouldBeConditional = (outCounts[edge.source] ?? 0) > 1
+    const targetNode = nodes.find((node) => node.id === edge.target)
+    const defaultKey =
+      toRouteKey(targetNode?.data.label ?? '') || `route_${index + 1}`
+    const nextData: FlowEdgeData = shouldBeConditional
+      ? {
+          kind: 'conditional',
+          routeKey: edge.data?.routeKey || defaultKey,
+        }
+      : {
+          kind: 'normal',
+          routeKey: undefined,
+        }
+    return applyEdgePresentation({ ...edge, data: nextData })
+  })
+}
+
 function App() {
   const [projectName, setProjectName] = useState('Agent Flow')
-  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNodeData>([
+  const [nodes, setNodes] = useNodesState<FlowNodeData>([
     {
       id: 'seed',
       type: 'flowNode',
       position: { x: 120, y: 140 },
       data: {
-        kind: 'agent',
+        roles: ['agent'],
         label: 'Coordinator',
         description: 'Owns the workflow and delegates to tools or agents.',
         tools: [],
       },
     },
   ])
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
+  const [edges, setEdges] = useEdgesState<Edge<FlowEdgeData>>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null
+  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null
 
   const onConnect = (connection: Connection) => {
-    setEdges((eds) =>
-      addEdge(
+    setEdges((eds) => {
+      const next = addEdge(
         {
           ...connection,
+          id: crypto.randomUUID(),
           type: 'smoothstep',
-          animated: true,
+          data: { kind: 'normal' },
         },
         eds,
-      ),
-    )
+      )
+      return normalizeConditionalEdges(next, nodes)
+    })
   }
 
-  const addNode = (kind: NodeKind) => {
-    setNodes((nds) => [...nds, createNode(kind, nds.length)])
+  const onNodesChange = (changes: NodeChange[]) => {
+    setNodes((nds) => applyNodeChanges(changes, nds))
+  }
+
+  const onEdgesChange = (changes: EdgeChange[]) => {
+    setEdges((eds) => normalizeConditionalEdges(applyEdgeChanges(changes, eds), nodes))
+  }
+
+  const addNode = (role: NodeRole) => {
+    setNodes((nds) => [...nds, createNode(role, nds.length)])
   }
 
   const applyTemplate = (templateId: string) => {
@@ -109,7 +191,7 @@ function App() {
       type: 'flowNode',
       position: { x: 140 + index * 240, y: 140 + (index % 2) * 120 },
       data: {
-        kind: node.kind,
+        roles: node.roles,
         label: node.label,
         description: node.description,
         tools: node.tools ?? [],
@@ -122,11 +204,20 @@ function App() {
       target: nextNodes[edge.target].id,
       type: 'smoothstep',
       animated: true,
+      data: edge.routeKey
+        ? {
+            kind: 'conditional',
+            routeKey: edge.routeKey,
+          }
+        : {
+            kind: 'normal',
+          },
     }))
 
     setNodes(nextNodes)
-    setEdges(nextEdges)
+    setEdges(normalizeConditionalEdges(nextEdges, nextNodes))
     setSelectedNodeId(nextNodes[0]?.id ?? null)
+    setSelectedEdgeId(null)
   }
 
   const updateSelectedNode = (patch: Partial<FlowNodeData>) => {
@@ -149,11 +240,51 @@ function App() {
     })
   }
 
+  const toggleRole = (role: NodeRole) => {
+    if (!selectedNode) return
+    const exists = selectedNode.data.roles.includes(role)
+    const nextRoles = exists
+      ? selectedNode.data.roles.filter((item) => item !== role)
+      : [...selectedNode.data.roles, role]
+    updateSelectedNode({ roles: nextRoles })
+  }
+
   const pythonCode = useMemo(
     () => generateLangGraphPython({ nodes, edges }),
     [nodes, edges],
   )
   const tsCode = useMemo(() => generateLangGraphTS({ nodes, edges }), [nodes, edges])
+
+  const updateSelectedEdge = (patch: Partial<FlowEdgeData>) => {
+    if (!selectedEdge) return
+    setEdges((eds) =>
+      normalizeConditionalEdges(
+        eds.map((edge) => {
+        if (edge.id !== selectedEdge.id) return edge
+        const data = { ...edge.data, ...patch } as FlowEdgeData
+        return applyEdgePresentation({ ...edge, data })
+      }),
+      nodes,
+    ),
+    )
+  }
+
+  const toggleEdgeKind = (kind: EdgeKind) => {
+    if (!selectedEdge) return
+    const outgoingCount = edges.filter((edge) => edge.source === selectedEdge.source).length
+    if (outgoingCount > 1) {
+      updateSelectedEdge({ kind: 'conditional' })
+      return
+    }
+    if (kind === 'conditional') {
+      const targetNode = nodes.find((node) => node.id === selectedEdge.target)
+      const defaultKey =
+        toRouteKey(targetNode?.data.label ?? '') || `route_${edges.indexOf(selectedEdge) + 1}`
+      updateSelectedEdge({ kind, routeKey: selectedEdge.data?.routeKey || defaultKey })
+    } else {
+      updateSelectedEdge({ kind, routeKey: undefined })
+    }
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -229,12 +360,13 @@ function App() {
               <Badge variant="secondary">Canvas</Badge>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
-              {KIND_OPTIONS.map((option) => (
+              {ROLE_OPTIONS.map((option) => (
                 <Button
                   key={option.value}
                   variant="outline"
                   size="sm"
                   onClick={() => addNode(option.value)}
+                  title={option.hint}
                 >
                   {option.label}
                 </Button>
@@ -272,8 +404,18 @@ function App() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onPaneClick={() => setSelectedNodeId(null)}
+            onNodeClick={(_, node) => {
+              setSelectedNodeId(node.id)
+              setSelectedEdgeId(null)
+            }}
+            onEdgeClick={(_, edge) => {
+              setSelectedEdgeId(edge.id)
+              setSelectedNodeId(null)
+            }}
+            onPaneClick={() => {
+              setSelectedNodeId(null)
+              setSelectedEdgeId(null)
+            }}
             nodeTypes={nodeTypes}
             fitView
           >
@@ -287,37 +429,79 @@ function App() {
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">Inspector</h2>
               <Badge variant="secondary">
-                {selectedNode ? selectedNode.data.kind : 'None'}
+                {selectedNode ? selectedNode.data.roles.join(', ') || 'Role' : 'None'}
               </Badge>
             </div>
             <Separator className="my-3" />
-            {!selectedNode ? (
+            {!selectedNode && !selectedEdge ? (
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>Select a node to define its role, tools, and behavior.</p>
                 <p>Use templates for a quick starting point.</p>
+              </div>
+            ) : selectedEdge ? (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Edge Type
+                  </label>
+                  <Select
+                    value={selectedEdge.data?.kind ?? 'normal'}
+                    onValueChange={(value) => toggleEdgeKind(value as EdgeKind)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="normal">Normal</SelectItem>
+                      <SelectItem value="conditional">Conditional</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {selectedEdge.data?.kind === 'conditional' ? (
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Route Key
+                    </label>
+                    <Input
+                      value={selectedEdge.data.routeKey ?? ''}
+                      onChange={(event) =>
+                        updateSelectedEdge({ routeKey: event.target.value })
+                      }
+                      placeholder="needs_review"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The node should return this route key to take this edge.
+                    </p>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <ScrollArea className="h-[520px] pr-3">
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Node Type
+                      Roles
                     </label>
-                    <Select
-                      value={selectedNode.data.kind}
-                      onValueChange={(value) => updateSelectedNode({ kind: value as NodeKind })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {KIND_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
+                    <div className="flex flex-wrap gap-2">
+                      {ROLE_OPTIONS.map((option) => {
+                        const active = selectedNode.data.roles.includes(option.value)
+                        return (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            size="sm"
+                            variant={active ? 'secondary' : 'outline'}
+                            onClick={() => toggleRole(option.value)}
+                            title={option.hint}
+                          >
                             {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                          </Button>
+                        )
+                      })}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Roles are labels, not limitations. An agent can also act like a tool or router.
+                    </p>
                   </div>
 
                   <div className="space-y-2">
