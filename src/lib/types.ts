@@ -1,4 +1,4 @@
-export type NodeKind = 'agent' | 'tool' | 'router' | 'memory'
+export type NodeRole = 'agent' | 'tool' | 'router' | 'memory'
 
 export type ToolDefinition = {
   id: string
@@ -8,14 +8,21 @@ export type ToolDefinition = {
 }
 
 export type FlowNodeData = {
-  kind: NodeKind
+  roles: NodeRole[]
   label: string
   description: string
   tools: string[]
 }
 
+export type EdgeKind = 'normal' | 'conditional'
+
+export type FlowEdgeData = {
+  kind: EdgeKind
+  routeKey?: string
+}
+
 export type TemplateNode = {
-  kind: NodeKind
+  roles: NodeRole[]
   label: string
   description: string
   tools?: string[]
@@ -24,6 +31,7 @@ export type TemplateNode = {
 export type TemplateEdge = {
   source: number
   target: number
+  routeKey?: string
 }
 
 export type GraphTemplate = {
