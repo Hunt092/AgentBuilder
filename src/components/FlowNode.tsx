@@ -3,9 +3,9 @@ import { Handle, Position } from 'reactflow'
 import { TOOL_LIBRARY } from '@/data/templates'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import type { FlowNodeData } from '@/lib/types'
+import type { FlowNodeData, NodeRole } from '@/lib/types'
 
-const KIND_LABEL: Record<FlowNodeData['kind'], string> = {
+const ROLE_LABEL: Record<NodeRole, string> = {
   agent: 'Agent',
   tool: 'Tool',
   router: 'Router',
@@ -31,9 +31,23 @@ export function FlowNode({ data, selected }: NodeProps<FlowNodeData>) {
           <p className="text-sm font-semibold leading-tight">{data.label || 'Untitled node'}</p>
           <p className="text-xs text-muted-foreground">{data.description}</p>
         </div>
-        <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
-          {KIND_LABEL[data.kind]}
-        </Badge>
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          {data.roles.length === 0 ? (
+            <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
+              Role
+            </Badge>
+          ) : (
+            data.roles.map((role) => (
+              <Badge
+                key={role}
+                variant="secondary"
+                className="text-[10px] uppercase tracking-wide"
+              >
+                {ROLE_LABEL[role]}
+              </Badge>
+            ))
+          )}
+        </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-1">
         {data.tools.length === 0 ? (
