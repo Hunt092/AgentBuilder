@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Moon, Sun } from 'lucide-react'
 import ReactFlow, {
   addEdge,
   applyEdgeChanges,
@@ -36,6 +37,7 @@ import { TEMPLATES, TOOL_LIBRARY } from '@/data/templates'
 import { generateLangGraphPython, generateLangGraphTS, validateGraph } from '@/lib/codegen'
 import { applyEdgePresentation, buildDefaultRouteKey, normalizeConditionalEdges } from '@/lib/edgeNormalization'
 import { applyFunctionalRoles } from '@/lib/roleInference'
+import { useTheme } from '@/lib/useTheme'
 import type { EdgeKind, FlowEdgeData, FlowNodeData, NodeRole } from '@/lib/types'
 
 const nodeTypes = { flowNode: FlowNode }
@@ -85,6 +87,7 @@ const createNode = (role: NodeRole, index: number): Node<FlowNodeData> => ({
 })
 
 function App() {
+  const { isDark, toggleTheme } = useTheme()
   const [projectName, setProjectName] = useState('AgentBuilder')
   const [nodes, setNodes] = useNodesState<FlowNodeData>([
     {
@@ -271,6 +274,18 @@ function App() {
         </div>
         <div className="flex items-center gap-3">
           <Badge variant="outline">LangGraph</Badge>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={toggleTheme}
+            title={`Switch to ${isDark ? 'light' : 'dark'} mode`}
+            aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
+            className="gap-2"
+          >
+            {isDark ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+            <span className="hidden sm:inline">{isDark ? 'Dark' : 'Light'}</span>
+          </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button>Generate</Button>
@@ -399,7 +414,7 @@ function App() {
             nodeTypes={nodeTypes}
             fitView
           >
-            <Background gap={24} size={1} color="hsl(var(--border))" />
+            <Background gap={24} size={1} color="var(--border)" />
             <Controls position="bottom-right" />
           </ReactFlow>
         </section>
