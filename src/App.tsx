@@ -33,7 +33,9 @@ import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TEMPLATES, TOOL_LIBRARY } from '@/data/templates'
-import { generateLangGraphPython, generateLangGraphTS } from '@/lib/codegen'
+import { generateLangGraphPython, generateLangGraphTS, validateGraph } from '@/lib/codegen'
+import { applyEdgePresentation, buildDefaultRouteKey, normalizeConditionalEdges } from '@/lib/edgeNormalization'
+import { applyFunctionalRoles } from '@/lib/roleInference'
 import type { EdgeKind, FlowEdgeData, FlowNodeData, NodeRole } from '@/lib/types'
 
 const nodeTypes = { flowNode: FlowNode }
@@ -75,65 +77,15 @@ const createNode = (role: NodeRole, index: number): Node<FlowNodeData> => ({
   type: 'flowNode',
   position: { x: 140 + index * 30, y: 120 + index * 40 },
   data: {
-    roles: [role],
+    roles: role === 'agent' ? ['agent'] : ['agent', role],
     label: `${role[0].toUpperCase()}${role.slice(1)} node`,
     description: 'Describe what this node should do.',
     tools: [],
   },
 })
 
-const toRouteKey = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-
-const applyEdgePresentation = (edge: Edge<FlowEdgeData>): Edge<FlowEdgeData> => {
-  if (edge.data?.kind === 'conditional') {
-    return {
-      ...edge,
-      label: edge.data.routeKey || 'route',
-      style: { strokeDasharray: '6 4' },
-      animated: true,
-    }
-  }
-  return {
-    ...edge,
-    label: undefined,
-    style: undefined,
-    animated: false,
-  }
-}
-
-const normalizeConditionalEdges = (
-  edges: Edge<FlowEdgeData>[],
-  nodes: Node<FlowNodeData>[],
-) => {
-  const outCounts = edges.reduce<Record<string, number>>((acc, edge) => {
-    acc[edge.source] = (acc[edge.source] ?? 0) + 1
-    return acc
-  }, {})
-
-  return edges.map((edge, index) => {
-    const shouldBeConditional = (outCounts[edge.source] ?? 0) > 1
-    const targetNode = nodes.find((node) => node.id === edge.target)
-    const defaultKey =
-      toRouteKey(targetNode?.data.label ?? '') || `route_${index + 1}`
-    const nextData: FlowEdgeData = shouldBeConditional
-      ? {
-          kind: 'conditional',
-          routeKey: edge.data?.routeKey || defaultKey,
-        }
-      : {
-          kind: 'normal',
-          routeKey: undefined,
-        }
-    return applyEdgePresentation({ ...edge, data: nextData })
-  })
-}
-
 function App() {
-  const [projectName, setProjectName] = useState('Agent Flow')
+  const [projectName, setProjectName] = useState('AgentBuilder')
   const [nodes, setNodes] = useNodesState<FlowNodeData>([
     {
       id: 'seed',
@@ -147,7 +99,7 @@ function App() {
       },
     },
   ])
-  const [edges, setEdges] = useEdgesState<Edge<FlowEdgeData>>([])
+  const [edges, setEdges] = useEdgesState<FlowEdgeData>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -166,27 +118,33 @@ function App() {
         },
         eds,
       )
-      return normalizeConditionalEdges(next, nodes)
+      const normalized = normalizeConditionalEdges(next, nodes)
+      setNodes((nds) => applyFunctionalRoles(nds, normalized))
+      return normalized
     })
   }
 
   const onNodesChange = (changes: NodeChange[]) => {
-    setNodes((nds) => applyNodeChanges(changes, nds))
+    setNodes((nds) => applyFunctionalRoles(applyNodeChanges(changes, nds), edges))
   }
 
   const onEdgesChange = (changes: EdgeChange[]) => {
-    setEdges((eds) => normalizeConditionalEdges(applyEdgeChanges(changes, eds), nodes))
+    setEdges((eds) => {
+      const next = normalizeConditionalEdges(applyEdgeChanges(changes, eds), nodes)
+      setNodes((nds) => applyFunctionalRoles(nds, next))
+      return next
+    })
   }
 
   const addNode = (role: NodeRole) => {
-    setNodes((nds) => [...nds, createNode(role, nds.length)])
+    setNodes((nds) => applyFunctionalRoles([...nds, createNode(role, nds.length)], edges))
   }
 
   const applyTemplate = (templateId: string) => {
     const template = TEMPLATES.find((item) => item.id === templateId)
     if (!template) return
 
-    const nextNodes = template.nodes.map((node, index) => ({
+    const nextNodes: Node<FlowNodeData>[] = template.nodes.map((node, index) => ({
       id: crypto.randomUUID(),
       type: 'flowNode',
       position: { x: 140 + index * 240, y: 140 + (index % 2) * 120 },
@@ -198,24 +156,29 @@ function App() {
       },
     }))
 
-    const nextEdges = template.edges.map((edge) => ({
-      id: crypto.randomUUID(),
-      source: nextNodes[edge.source].id,
-      target: nextNodes[edge.target].id,
-      type: 'smoothstep',
-      animated: true,
-      data: edge.routeKey
+    const nextEdges: Edge<FlowEdgeData>[] = template.edges.map((edge) => {
+      const data: FlowEdgeData = edge.routeKey
         ? {
             kind: 'conditional',
             routeKey: edge.routeKey,
           }
         : {
             kind: 'normal',
-          },
-    }))
+          }
 
-    setNodes(nextNodes)
-    setEdges(normalizeConditionalEdges(nextEdges, nextNodes))
+      return {
+        id: crypto.randomUUID(),
+        source: nextNodes[edge.source].id,
+        target: nextNodes[edge.target].id,
+        type: 'smoothstep',
+        animated: true,
+        data,
+      }
+    })
+
+    const normalizedEdges = normalizeConditionalEdges(nextEdges, nextNodes)
+    setNodes(applyFunctionalRoles(nextNodes, normalizedEdges))
+    setEdges(normalizedEdges)
     setSelectedNodeId(nextNodes[0]?.id ?? null)
     setSelectedEdgeId(null)
   }
@@ -223,10 +186,13 @@ function App() {
   const updateSelectedNode = (patch: Partial<FlowNodeData>) => {
     if (!selectedNode) return
     setNodes((nds) =>
-      nds.map((node) => {
-        if (node.id !== selectedNode.id) return node
-        return { ...node, data: { ...node.data, ...patch } }
-      }),
+      applyFunctionalRoles(
+        nds.map((node) => {
+          if (node.id !== selectedNode.id) return node
+          return { ...node, data: { ...node.data, ...patch } }
+        }),
+        edges,
+      ),
     )
   }
 
@@ -254,6 +220,7 @@ function App() {
     [nodes, edges],
   )
   const tsCode = useMemo(() => generateLangGraphTS({ nodes, edges }), [nodes, edges])
+  const validationIssues = useMemo(() => validateGraph({ nodes, edges }), [nodes, edges])
 
   const updateSelectedEdge = (patch: Partial<FlowEdgeData>) => {
     if (!selectedEdge) return
@@ -278,8 +245,11 @@ function App() {
     }
     if (kind === 'conditional') {
       const targetNode = nodes.find((node) => node.id === selectedEdge.target)
-      const defaultKey =
-        toRouteKey(targetNode?.data.label ?? '') || `route_${edges.indexOf(selectedEdge) + 1}`
+      const defaultKey = buildDefaultRouteKey(
+        targetNode?.data.label,
+        selectedEdge.id,
+        edges.indexOf(selectedEdge) + 1,
+      )
       updateSelectedEdge({ kind, routeKey: selectedEdge.data?.routeKey || defaultKey })
     } else {
       updateSelectedEdge({ kind, routeKey: undefined })
@@ -291,7 +261,7 @@ function App() {
       <header className="flex items-center justify-between border-b bg-card/80 px-6 py-4 backdrop-blur">
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
-            GraphBuilder
+            AgentBuilder
           </p>
           <Input
             value={projectName}
@@ -314,6 +284,16 @@ function App() {
                   <TabsTrigger value="python">Python</TabsTrigger>
                   <TabsTrigger value="ts">JS / TS</TabsTrigger>
                 </TabsList>
+                {validationIssues.length > 0 ? (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    <p className="font-semibold">Checks before export</p>
+                    <ul className="mt-2 list-disc pl-4">
+                      {validationIssues.map((issue) => (
+                        <li key={issue.message}>{issue.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <TabsContent value="python" className="min-w-0 space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-muted-foreground">
@@ -484,7 +464,7 @@ function App() {
                     </label>
                     <div className="flex flex-wrap gap-2">
                       {ROLE_OPTIONS.map((option) => {
-                        const active = selectedNode.data.roles.includes(option.value)
+                        const active = selectedNode!.data.roles.includes(option.value)
                         return (
                           <Button
                             key={option.value}
@@ -500,7 +480,8 @@ function App() {
                       })}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Roles are labels, not limitations. An agent can also act like a tool or router.
+                      Roles auto-expand by behavior: all nodes are agents, tools add tool role,
+                      branching adds router, memory-like nodes add memory.
                     </p>
                   </div>
 
@@ -509,7 +490,7 @@ function App() {
                       Name
                     </label>
                     <Input
-                      value={selectedNode.data.label}
+                      value={selectedNode!.data.label}
                       onChange={(event) => updateSelectedNode({ label: event.target.value })}
                     />
                   </div>
@@ -519,7 +500,7 @@ function App() {
                       What does this node do?
                     </label>
                     <Textarea
-                      value={selectedNode.data.description}
+                      value={selectedNode!.data.description}
                       onChange={(event) =>
                         updateSelectedNode({ description: event.target.value })
                       }
@@ -539,7 +520,7 @@ function App() {
                           </p>
                           <div className="flex flex-wrap gap-2">
                             {tools.map((tool) => {
-                              const selected = selectedNode.data.tools.includes(tool.id)
+                              const selected = selectedNode!.data.tools.includes(tool.id)
                               return (
                                 <Button
                                   key={tool.id}
